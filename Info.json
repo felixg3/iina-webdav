@@ -1,0 +1,25 @@
+{
+  "name": "WebDAV Browser",
+  "identifier": "com.felix.iina-webdav",
+  "version": "0.1.0",
+  "description": "Browse and stream videos from a WebDAV server",
+  "author": {
+    "name": "felix"
+  },
+  "entry": "main.js",
+  "sidebarTab": {
+    "name": "WebDAV"
+  },
+  "preferencesPage": "pref.html",
+  "preferenceDefaults": {
+    "serverUrl": "",
+    "username": "",
+    "password": "",
+    "startPath": "/",
+    "videoExtensions": "mp4,mkv,avi,mov,wmv,flv,webm,m4v,mpg,mpeg,ts,m2ts,vob"
+  },
+  "permissions": [
+    "show-osd"
+  ],
+  "allowedDomains": ["*"]
+}
