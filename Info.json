@@ -19,7 +19,8 @@
     "videoExtensions": "mp4,mkv,avi,mov,wmv,flv,webm,m4v,mpg,mpeg,ts,m2ts,vob"
   },
   "permissions": [
-    "show-osd"
+    "show-osd",
+    "file-system"
   ],
   "allowedDomains": ["*"]
 }
