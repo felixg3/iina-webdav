@@ -1,16 +1,13 @@
 // WebDAV Browser — Sidebar Webview
-// Runs inside IINA's WKWebView. Has fetch() but no iina.core/mpv access.
-// Communicates with main.js via iina.postMessage / iina.onMessage.
+// Runs inside IINA's WKWebView. No direct network access (CORS blocked from file://).
+// All network requests are delegated to main.js via iina.postMessage / iina.onMessage.
 
 (function () {
   "use strict";
 
   var state = {
     serverUrl: "",
-    username: "",
-    password: "",
     startPath: "/",
-    videoExtensions: [],
     currentPath: "/",
     entries: []
   };
@@ -25,13 +22,7 @@
 
   iina.onMessage("config", function (data) {
     state.serverUrl = (data.serverUrl || "").replace(/\/+$/, "");
-    state.username = data.username || "";
-    state.password = data.password || "";
     state.startPath = data.startPath || "/";
-    state.videoExtensions = (data.videoExtensions || "")
-      .split(",")
-      .map(function (s) { return s.trim().toLowerCase(); })
-      .filter(Boolean);
 
     if (!state.serverUrl) {
       showStatus("Server not configured.\nSet URL in plugin preferences.", false);
@@ -41,111 +32,25 @@
     navigate(state.startPath);
   });
 
+  // --- IPC: Receive directory listing results from main.js ---
+
+  iina.onMessage("propfind-result", function (data) {
+    // Only process if the result matches the current path we're waiting for
+    state.entries = data.entries || [];
+    render();
+  });
+
+  iina.onMessage("propfind-error", function (data) {
+    var message = data.message || "Unknown error";
+    if (message === "AUTH_FAILED") {
+      showStatus("Authentication failed.\nCheck credentials in preferences.", true);
+    } else {
+      showStatus("Error: " + message, true);
+    }
+  });
+
   // Request config from entry script on load
   iina.postMessage("get-config");
-
-  // --- WebDAV ---
-
-  function propfind(path) {
-    if (!path.endsWith("/")) path += "/";
-
-    var url = state.serverUrl + path;
-    var headers = {
-      "Depth": "1",
-      "Content-Type": "application/xml; charset=utf-8"
-    };
-    if (state.username) {
-      headers["Authorization"] = "Basic " + btoa(state.username + ":" + state.password);
-    }
-
-    var body =
-      '<?xml version="1.0" encoding="utf-8"?>\n' +
-      '<D:propfind xmlns:D="DAV:">\n' +
-      "  <D:prop>\n" +
-      "    <D:displayname/>\n" +
-      "    <D:getcontentlength/>\n" +
-      "    <D:getcontenttype/>\n" +
-      "    <D:getlastmodified/>\n" +
-      "    <D:resourcetype/>\n" +
-      "  </D:prop>\n" +
-      "</D:propfind>";
-
-    return fetch(url, {
-      method: "PROPFIND",
-      headers: headers,
-      body: body
-    }).then(function (response) {
-      if (response.status === 401) {
-        throw new Error("AUTH_FAILED");
-      }
-      if (!response.ok && response.status !== 207) {
-        throw new Error("HTTP " + response.status + " " + response.statusText);
-      }
-      return response.text();
-    }).then(function (text) {
-      return parseResponse(text, path);
-    });
-  }
-
-  function parseResponse(xmlText, basePath) {
-    var parser = new DOMParser();
-    var doc = parser.parseFromString(xmlText, "application/xml");
-    var ns = "DAV:";
-
-    var responses = doc.getElementsByTagNameNS(ns, "response");
-    var entries = [];
-
-    for (var i = 0; i < responses.length; i++) {
-      var resp = responses[i];
-
-      var hrefEl = resp.getElementsByTagNameNS(ns, "href")[0];
-      var href = hrefEl ? hrefEl.textContent : "";
-
-      // Skip the directory itself
-      var decodedHref = decodeURIComponent(href).replace(/\/+$/, "");
-      var decodedBase = decodeURIComponent(basePath).replace(/\/+$/, "");
-      if (decodedHref === decodedBase) continue;
-
-      var propstat = resp.getElementsByTagNameNS(ns, "propstat")[0];
-      var prop = propstat ? propstat.getElementsByTagNameNS(ns, "prop")[0] : null;
-
-      var displaynameEl = prop ? prop.getElementsByTagNameNS(ns, "displayname")[0] : null;
-      var contentLengthEl = prop ? prop.getElementsByTagNameNS(ns, "getcontentlength")[0] : null;
-      var resourceTypeEl = prop ? prop.getElementsByTagNameNS(ns, "resourcetype")[0] : null;
-
-      var name = displaynameEl && displaynameEl.textContent
-        ? displaynameEl.textContent
-        : decodeURIComponent(href.split("/").filter(Boolean).pop() || "");
-
-      var isDirectory = resourceTypeEl
-        ? resourceTypeEl.getElementsByTagNameNS(ns, "collection").length > 0
-        : href.endsWith("/");
-
-      var size = contentLengthEl ? parseInt(contentLengthEl.textContent, 10) : 0;
-
-      entries.push({
-        name: name,
-        href: href,
-        isDirectory: isDirectory,
-        size: size,
-        isVideo: !isDirectory && isVideoFile(name)
-      });
-    }
-
-    // Sort: directories first, then alphabetical
-    entries.sort(function (a, b) {
-      if (a.isDirectory && !b.isDirectory) return -1;
-      if (!a.isDirectory && b.isDirectory) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    return entries;
-  }
-
-  function isVideoFile(name) {
-    var ext = (name.split(".").pop() || "").toLowerCase();
-    return state.videoExtensions.indexOf(ext) !== -1;
-  }
 
   // --- Navigation ---
 
@@ -154,16 +59,8 @@
     state.currentPath = path;
     showLoading();
 
-    propfind(path).then(function (entries) {
-      state.entries = entries;
-      render();
-    }).catch(function (e) {
-      if (e.message === "AUTH_FAILED") {
-        showStatus("Authentication failed.\nCheck credentials in preferences.", true);
-      } else {
-        showStatus("Error: " + e.message, true);
-      }
-    });
+    // Delegate PROPFIND to main.js (runs outside WKWebView, no CORS issues)
+    iina.postMessage("propfind", { path: path });
   }
 
   // --- Rendering ---
